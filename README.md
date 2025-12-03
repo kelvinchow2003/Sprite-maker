@@ -24,6 +24,7 @@ This tool allows for rapid prototyping of monsters, food items, and UI elements.
 * **Smart Palette:** Drag-and-drop colors to reorder them.
 * **Hex/RGB Input:** Paste colors directly from external design tools.
 * **Save Colors:** Drag the "Current Color" box into a palette slot to save it for later.
+* **Generate Hex Colours:** https://kelvinchow2003.github.io/Pallete-Pilot/ 
 
 ### 🌐 Import & Reference
 * **Google Search Integration:** One-click search for reference sprites.

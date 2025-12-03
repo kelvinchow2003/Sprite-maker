@@ -3,6 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    
+    <link 
+      rel="icon" 
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%2310B981'/><text x='50%' y='50%' dominant-baseline='central' text-anchor='middle' font-size='70' fill='white' font-weight='bold'>K</text></svg>" 
+    />
+
     <title>Kelvin's Sprite Creator</title>
     <style>
         :root {
@@ -676,6 +682,8 @@
         }
     }
 
+    // --- APP UTILS ---
+
     function setupDragSource() {
         dragSource.addEventListener('dragstart', (e) => {
             e.dataTransfer.setData('type', 'current');
@@ -791,6 +799,10 @@
         previewCanvas.width = state.width * state.previewScale;
         previewCanvas.height = state.height * state.previewScale;
         previewCtx.imageSmoothingEnabled = false;
+        
+        // Recalculate editor visual scaling
+        const mainArea = document.getElementById('main-area');
+        // Ensure initial sizing works on mobile/desktop
         renderEditor();
     }
 

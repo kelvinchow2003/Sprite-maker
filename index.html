@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Kelvin's Sprite Creator</title>
     <style>
         :root {
@@ -14,30 +14,94 @@
             --success: #28a745;
             --warning: #ffc107;
         }
+        
+        * { box-sizing: border-box; }
+
         body {
             font-family: 'Segoe UI', sans-serif;
             background-color: var(--bg-color);
             color: var(--text);
             display: flex;
-            height: 100vh;
+            height: 100vh; /* Fallback */
+            height: 100dvh; /* Dynamic Height for mobile browsers with URL bars */
+            width: 100vw;
             margin: 0;
             overflow: hidden;
             user-select: none; 
+            overscroll-behavior: none;
         }
         
-        /* Layout */
+        /* --- DESKTOP LAYOUT (Default) --- */
         .sidebar {
             width: 280px;
             background-color: var(--panel-bg);
             padding: 15px;
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 15px;
             border-right: 1px solid var(--border);
             overflow-y: auto;
+            flex-shrink: 0;
+            z-index: 10;
         }
         
-        /* NEW SIDEBAR TITLE STYLE */
+        .main-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            background-image: 
+                linear-gradient(45deg, #222 25%, transparent 25%), 
+                linear-gradient(-45deg, #222 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #222 75%), 
+                linear-gradient(-45deg, transparent 75%, #222 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+            overflow: hidden;
+            gap: 20px;
+            /* CRITICAL: Prevents screen scrolling when drawing on mobile */
+            touch-action: none; 
+        }
+
+        /* --- MOBILE LAYOUT OVERRIDE --- */
+        /* This activates ONLY when screen is smaller than 768px (Tablets/Phones) */
+        @media (max-width: 768px) {
+            body { 
+                flex-direction: column; /* Stack vertically instead of side-by-side */
+            }
+            
+            .sidebar { 
+                width: 100%; 
+                height: 45%; /* Bottom 45% for tools */
+                order: 2;    /* Move to bottom */
+                border-right: none; 
+                border-top: 4px solid var(--accent); /* Visual divider */
+                padding: 10px;
+                gap: 10px;
+                box-shadow: 0 -5px 20px rgba(0,0,0,0.5);
+            }
+            
+            .main-area { 
+                width: 100%; 
+                height: 55%; /* Top 55% for drawing */
+                order: 1;    /* Move to top */
+                gap: 0;      /* Remove gaps to maximize drawing space */
+                background-size: 10px 10px; /* Smaller pattern */
+            }
+
+            /* Hide the big title on mobile to save precious screen space */
+            .app-title { display: none; }
+            
+            /* Make buttons bigger/easier to tap with fingers */
+            button { padding: 12px; font-size: 1em; }
+            .swatch { height: 45px; }
+            
+            /* Adjust canvas size logic handled in JS resizeCanvas() */
+        }
+
+        /* --- COMPONENTS --- */
         .app-title {
             margin: 0 0 5px 0;
             font-size: 1.4em;
@@ -53,25 +117,8 @@
             text-shadow: 2px 2px 0 #000;
         }
 
-        .main-area {
-            flex: 1;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            position: relative;
-            background-image: 
-                linear-gradient(45deg, #222 25%, transparent 25%), 
-                linear-gradient(-45deg, #222 25%, transparent 25%), 
-                linear-gradient(45deg, transparent 75%, #222 75%), 
-                linear-gradient(-45deg, transparent 75%, #222 75%);
-            background-size: 20px 20px;
-            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
-            overflow: hidden;
-        }
+        h3 { margin-bottom: 8px; font-size: 1em; border-bottom: 1px solid #555; padding-bottom: 2px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
 
-        h3 { margin-bottom: 10px; font-size: 1.1em; border-bottom: 1px solid #555; padding-bottom: 5px; }
-
-        /* Tools */
         .tool-group {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -87,6 +134,7 @@
             font-size: 0.9em;
             transition: 0.2s;
             position: relative;
+            touch-action: manipulation;
         }
         button:hover { background: #5a5a5a; }
         button:active { transform: translateY(1px); }
@@ -95,7 +143,6 @@
             border-color: #7aa0ff;
         }
 
-        /* Brush Size Control */
         .brush-control {
             display: flex;
             align-items: center;
@@ -106,7 +153,6 @@
             border-radius: 4px;
         }
         
-        /* Import Section Styles */
         .import-box {
             background: rgba(0,0,0,0.2);
             padding: 10px;
@@ -130,15 +176,15 @@
             box-sizing: border-box;
         }
 
-        /* Color Picker Section */
         .color-controls { display: flex; flex-direction: column; gap: 8px; }
         .current-color-row { display: flex; gap: 8px; align-items: center; }
         #drag-source {
             width: 40px; height: 40px; border: 2px solid white; border-radius: 4px; cursor: grab;
             box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            flex-shrink: 0;
         }
-        .input-group { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-        input[type="color"] { width: 100%; height: 20px; border: none; cursor: pointer; background: none; padding: 0; }
+        .input-group { flex: 1; display: flex; flex-direction: column; gap: 2px; width: 100%; }
+        input[type="color"] { width: 100%; height: 25px; border: none; cursor: pointer; background: none; padding: 0; }
         input[type="text"] {
             background: #222; border: 1px solid var(--border); color: white;
             padding: 4px; border-radius: 4px; text-transform: uppercase; font-family: monospace;
@@ -153,16 +199,17 @@
         }
         .swatch.drag-over { border: 2px dashed white; opacity: 0.5; }
 
-        /* Canvas */
         canvas {
             image-rendering: pixelated;
             box-shadow: 0 0 20px rgba(0,0,0,0.5);
             background: white;
-            /* We hide default cursor to show our custom crosshair */
             cursor: none; 
+            /* Ensure canvas doesn't overflow on small screens */
+            max-width: 95%;
+            max-height: 95%;
+            touch-action: none;
         }
 
-        /* Frames & Preview */
         .preview-box {
             background: #222; border: 1px solid var(--border); padding: 10px; text-align: center; border-radius: 4px;
         }
@@ -175,7 +222,6 @@
         }
         .frame-thumb.selected { border-color: var(--accent); }
 
-        /* General Inputs */
         .control-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.85em; }
         input[type="number"] { width: 50px; background: #222; border: 1px solid var(--border); color: white; padding: 4px; border-radius: 4px; }
         #file-input { display: none; }
@@ -214,16 +260,6 @@
             </div>
         </div>
 
-        <div>
-            <h3>🌐 Import</h3>
-            <div class="import-box">
-                <a href="https://www.google.com/search?q=pixel+art+sprite+simple+transparent&tbm=isch" target="_blank" class="btn-search" title="Search">🔍 Search Online</a>
-                <div style="font-size:0.8em; color:#aaa; margin:5px 0;">Paste images with <strong>Ctrl+V</strong></div>
-                <button class="btn-upload" onclick="document.getElementById('file-input').click()">📁 Upload</button>
-                <input type="file" id="file-input" accept="image/*" onchange="handleFileUpload(this)">
-            </div>
-        </div>
-
         <div class="color-section">
             <h3>Palette</h3>
             <div class="color-controls">
@@ -254,6 +290,16 @@
                 <button onclick="addFrame()" style="flex:1;">+ Add</button>
                 <button onclick="duplicateFrame()" style="flex:1;">Copy</button>
                 <button onclick="deleteFrame()" style="width:30px;">🗑️</button>
+            </div>
+        </div>
+
+        <div>
+            <h3>🌐 Import</h3>
+            <div class="import-box">
+                <a href="https://www.google.com/search?q=pixel+art+sprite+simple+transparent&tbm=isch" target="_blank" class="btn-search" title="Search">🔍 Search Online</a>
+                <div style="font-size:0.8em; color:#aaa; margin:5px 0;">Paste images with <strong>Ctrl+V</strong></div>
+                <button class="btn-upload" onclick="document.getElementById('file-input').click()">📁 Upload</button>
+                <input type="file" id="file-input" accept="image/*" onchange="handleFileUpload(this)">
             </div>
         </div>
 
@@ -311,6 +357,9 @@
         renderPalette(); 
         startAnimationLoop();
         
+        // --- EVENTS ---
+        
+        // Mouse Events
         canvas.addEventListener('mousedown', startDraw);
         window.addEventListener('mouseup', endDraw); 
         canvas.addEventListener('mousemove', (e) => {
@@ -320,6 +369,24 @@
         canvas.addEventListener('mouseleave', () => {
             state.mouseX = -1;
             renderEditor(); 
+        });
+
+        // Touch Events (Mobile) - Added support for touch drawing
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // Prevent scroll
+            trackTouch(e);
+            startDraw(e);
+        }, {passive: false});
+        
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault(); // Prevent scroll
+            trackTouch(e);
+            draw(e);
+        }, {passive: false});
+        
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            endDraw();
         });
 
         window.addEventListener('keydown', handleShortcuts);
@@ -346,116 +413,40 @@
         updateColor('#000000');
     }
 
-    function saveHistory() {
-        if (state.historyIndex < state.history.length - 1) {
-            state.history = state.history.slice(0, state.historyIndex + 1);
-        }
-        if (state.history.length > 50) {
-            state.history.shift();
-            state.historyIndex--;
-        }
-        const currentData = state.frames[state.currentFrameIndex];
-        const copy = new ImageData(
-            new Uint8ClampedArray(currentData.data),
-            currentData.width,
-            currentData.height
-        );
-        state.history.push({
-            frameIndex: state.currentFrameIndex,
-            data: copy
-        });
-        state.historyIndex++;
-    }
-
-    function undo() {
-        if (state.historyIndex >= 0) {
-            const hist = state.history[state.historyIndex];
-            if(hist.frameIndex === state.currentFrameIndex) {
-                 state.frames[state.currentFrameIndex] = new ImageData(
-                    new Uint8ClampedArray(hist.data.data),
-                    hist.data.width,
-                    hist.data.height
-                );
-                state.historyIndex--;
-                renderEditor();
-                updateFrameThumb(state.currentFrameIndex);
-            } else {
-                state.currentFrameIndex = hist.frameIndex;
-                state.frames[state.currentFrameIndex] = hist.data; 
-                state.historyIndex--;
-                renderEditor();
-                renderFrameList();
-            }
-        }
-    }
-
-    function redo() {
-        if (state.historyIndex < state.history.length - 1) {
-            state.historyIndex++;
-            const hist = state.history[state.historyIndex];
-            state.frames[state.currentFrameIndex] = new ImageData(
-                new Uint8ClampedArray(hist.data.data),
-                hist.data.width,
-                hist.data.height
-            );
-            renderEditor();
-            updateFrameThumb(state.currentFrameIndex);
-        }
-    }
-    
-    function commitToHistory() {
-        if (state.historyIndex < state.history.length - 1) {
-            state.history = state.history.slice(0, state.historyIndex + 1);
-        }
-        const currentData = state.frames[state.currentFrameIndex];
-        const copy = new ImageData(
-            new Uint8ClampedArray(currentData.data),
-            currentData.width,
-            currentData.height
-        );
-        state.history.push({
-            frameIndex: state.currentFrameIndex,
-            data: copy
-        });
-        state.historyIndex++;
-    }
-
-    function handleShortcuts(e) {
-        if (e.ctrlKey && e.key === 'z') {
-            e.preventDefault();
-            if(state.historyIndex > 0) {
-                state.historyIndex--;
-                const hist = state.history[state.historyIndex];
-                state.frames[state.currentFrameIndex] = new ImageData(
-                    new Uint8ClampedArray(hist.data.data), hist.data.width, hist.data.height
-                );
-                renderEditor();
-                updateFrameThumb(state.currentFrameIndex);
-            }
-        }
-        if ((e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) {
-            e.preventDefault();
-            if(state.historyIndex < state.history.length - 1) {
-                state.historyIndex++;
-                const hist = state.history[state.historyIndex];
-                state.frames[state.currentFrameIndex] = new ImageData(
-                    new Uint8ClampedArray(hist.data.data), hist.data.width, hist.data.height
-                );
-                renderEditor();
-                updateFrameThumb(state.currentFrameIndex);
-            }
-        }
-    }
+    // --- MOUSE & TOUCH TRACKING ---
 
     function trackMouse(e) {
         const rect = canvas.getBoundingClientRect();
-        state.mouseX = Math.floor((e.clientX - rect.left) / state.scale);
-        state.mouseY = Math.floor((e.clientY - rect.top) / state.scale);
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        
+        const rawX = (e.clientX - rect.left) * scaleX;
+        const rawY = (e.clientY - rect.top) * scaleY;
+        
+        state.mouseX = Math.floor(rawX / state.scale);
+        state.mouseY = Math.floor(rawY / state.scale);
         renderEditor(); 
     }
 
+    function trackTouch(e) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        if(!touch) return;
+
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        
+        const rawX = (touch.clientX - rect.left) * scaleX;
+        const rawY = (touch.clientY - rect.top) * scaleY;
+        
+        state.mouseX = Math.floor(rawX / state.scale);
+        state.mouseY = Math.floor(rawY / state.scale);
+    }
+
+    // --- DRAWING LOGIC ---
+
     function startDraw(e) {
-        if (e.button !== 0) return; 
+        if (e.type === 'mousedown' && e.button !== 0) return; 
         state.isDrawing = true;
         draw(e);
     }
@@ -556,7 +547,8 @@
         }
         ctx.stroke();
 
-        if (state.mouseX >= 0 && state.mouseY >= 0 && state.mouseX < state.width && state.mouseY < state.height) {
+        // Cursor Drawing
+        if (state.mouseX >= 0 && state.mouseY >= 0) {
             const offset = Math.floor(state.brushSize / 2);
             const drawX = (state.mouseX - offset) * state.scale;
             const drawY = (state.mouseY - offset) * state.scale;
@@ -577,6 +569,109 @@
                 ctx.strokeRect(drawX, drawY, drawSize, drawSize);
                 ctx.fillStyle = state.color + '80'; 
                 ctx.fillRect(drawX, drawY, drawSize, drawSize);
+            }
+        }
+    }
+
+    // --- UNDO / REDO ---
+
+    function saveHistory() {
+        if (state.historyIndex < state.history.length - 1) {
+            state.history = state.history.slice(0, state.historyIndex + 1);
+        }
+        if (state.history.length > 50) {
+            state.history.shift();
+            state.historyIndex--;
+        }
+        const currentData = state.frames[state.currentFrameIndex];
+        const copy = new ImageData(
+            new Uint8ClampedArray(currentData.data),
+            currentData.width,
+            currentData.height
+        );
+        state.history.push({
+            frameIndex: state.currentFrameIndex,
+            data: copy
+        });
+        state.historyIndex++;
+    }
+
+    function undo() {
+        if (state.historyIndex >= 0) {
+            const hist = state.history[state.historyIndex];
+            if(hist.frameIndex === state.currentFrameIndex) {
+                 state.frames[state.currentFrameIndex] = new ImageData(
+                    new Uint8ClampedArray(hist.data.data),
+                    hist.data.width,
+                    hist.data.height
+                );
+                state.historyIndex--;
+                renderEditor();
+                updateFrameThumb(state.currentFrameIndex);
+            } else {
+                state.currentFrameIndex = hist.frameIndex;
+                state.frames[state.currentFrameIndex] = hist.data; 
+                state.historyIndex--;
+                renderEditor();
+                renderFrameList();
+            }
+        }
+    }
+
+    function redo() {
+        if (state.historyIndex < state.history.length - 1) {
+            state.historyIndex++;
+            const hist = state.history[state.historyIndex];
+            state.frames[state.currentFrameIndex] = new ImageData(
+                new Uint8ClampedArray(hist.data.data),
+                hist.data.width,
+                hist.data.height
+            );
+            renderEditor();
+            updateFrameThumb(state.currentFrameIndex);
+        }
+    }
+    
+    function commitToHistory() {
+        if (state.historyIndex < state.history.length - 1) {
+            state.history = state.history.slice(0, state.historyIndex + 1);
+        }
+        const currentData = state.frames[state.currentFrameIndex];
+        const copy = new ImageData(
+            new Uint8ClampedArray(currentData.data),
+            currentData.width,
+            currentData.height
+        );
+        state.history.push({
+            frameIndex: state.currentFrameIndex,
+            data: copy
+        });
+        state.historyIndex++;
+    }
+
+    function handleShortcuts(e) {
+        if (e.ctrlKey && e.key === 'z') {
+            e.preventDefault();
+            if(state.historyIndex > 0) {
+                state.historyIndex--;
+                const hist = state.history[state.historyIndex];
+                state.frames[state.currentFrameIndex] = new ImageData(
+                    new Uint8ClampedArray(hist.data.data), hist.data.width, hist.data.height
+                );
+                renderEditor();
+                updateFrameThumb(state.currentFrameIndex);
+            }
+        }
+        if ((e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) {
+            e.preventDefault();
+            if(state.historyIndex < state.history.length - 1) {
+                state.historyIndex++;
+                const hist = state.history[state.historyIndex];
+                state.frames[state.currentFrameIndex] = new ImageData(
+                    new Uint8ClampedArray(hist.data.data), hist.data.width, hist.data.height
+                );
+                renderEditor();
+                updateFrameThumb(state.currentFrameIndex);
             }
         }
     }
@@ -696,6 +791,7 @@
         previewCanvas.width = state.width * state.previewScale;
         previewCanvas.height = state.height * state.previewScale;
         previewCtx.imageSmoothingEnabled = false;
+        renderEditor();
     }
 
     function clearCanvas() {

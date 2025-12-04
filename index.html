@@ -203,11 +203,21 @@
 
         .tool-group {
 
-            display: grid;
+            display: flex;
 
-            grid-template-columns: repeat(5, 1fr);
+            flex-wrap: wrap;
 
             gap: 5px;
+
+            justify-content: center;
+
+        }
+
+        .tool-group button {
+
+            flex: 1 0 18%; /* Flexible width */
+
+            min-width: 35px;
 
         }
 
@@ -421,6 +431,9 @@
 <button id="btn-eraser" onclick="setTool('eraser')" title="Eraser (E)">🧹</button>
 <button id="btn-picker" onclick="setTool('picker')" title="Picker (I)">🧪</button>
 <button id="btn-bucket" onclick="setTool('bucket')" title="Bucket (B)">🪣</button>
+<button id="btn-line" onclick="setTool('line')" title="Line Tool (L)">📏</button>
+<button id="btn-rect" onclick="setTool('rect')" title="Rectangle (R)">⬜</button>
+<button id="btn-circle" onclick="setTool('circle')" title="Ellipse/Circle (C)">⭕</button>
 <button onclick="clearCanvas()" title="Clear Frame (Del)">❌</button>
 </div>
 <div class="brush-control">
@@ -531,13 +544,17 @@
 
         mouseY: -1,
 
+        startDragX: -1, 
+
+        startDragY: -1, 
+
         showGrid: true,
 
         showOnionSkin: false,
 
-        mirrorX: false, // Left/Right
+        mirrorX: false, 
 
-        mirrorY: false  // Up/Down
+        mirrorY: false 
 
     };
 
@@ -731,25 +748,21 @@
 
         if (e.type === 'mousedown' && e.button !== 0) return; 
 
+        state.startDragX = state.mouseX;
+
+        state.startDragY = state.mouseY;
+
         if (state.tool === 'bucket') {
 
             const x = state.mouseX;
 
             const y = state.mouseY;
 
-            // Standard Fill
-
             floodFill(x, y, state.color);
-
-            // X-Mirror Fill
 
             if (state.mirrorX) floodFill(state.width - 1 - x, y, state.color);
 
-            // Y-Mirror Fill
-
             if (state.mirrorY) floodFill(x, state.height - 1 - y, state.color);
-
-            // Quad Fill
 
             if (state.mirrorX && state.mirrorY) floodFill(state.width - 1 - x, state.height - 1 - y, state.color);
 
@@ -773,6 +786,20 @@
 
         if (state.isDrawing) {
 
+            if (state.tool === 'line') {
+
+                applyLine(state.startDragX, state.startDragY, state.mouseX, state.mouseY);
+
+            } else if (state.tool === 'rect') {
+
+                applyRect(state.startDragX, state.startDragY, state.mouseX, state.mouseY);
+
+            } else if (state.tool === 'circle') {
+
+                applyEllipse(state.startDragX, state.startDragY, state.mouseX, state.mouseY);
+
+            }
+
             state.isDrawing = false;
 
             updateFrameThumb(state.currentFrameIndex);
@@ -786,6 +813,16 @@
     function draw(e) {
 
         if (!state.isDrawing) return;
+
+        // Shape Previews
+
+        if (['line', 'rect', 'circle'].includes(state.tool)) {
+
+            renderEditor();
+
+            return;
+
+        }
 
         const x = state.mouseX;
 
@@ -825,7 +862,7 @@
 
         }
 
-        // Standard Pen/Eraser with Symmetry
+        // Standard Pen/Eraser
 
         const bigint = parseInt(state.color.slice(1), 16);
 
@@ -835,17 +872,13 @@
 
         const b = bigint & 255;
 
-        const offset = Math.floor(state.brushSize / 2);
-
         for (let ix = 0; ix < state.brushSize; ix++) {
 
             for (let iy = 0; iy < state.brushSize; iy++) {
 
-                const drawX = x - offset + ix;
+                const drawX = x - Math.floor(state.brushSize / 2) + ix;
 
-                const drawY = y - offset + iy;
-
-                // Helper to draw a single pixel
+                const drawY = y - Math.floor(state.brushSize / 2) + iy;
 
                 const paintPixel = (px, py) => {
 
@@ -873,33 +906,13 @@
 
                 };
 
-                // 1. Original
-
                 paintPixel(drawX, drawY);
 
-                // 2. Mirror X
+                if (state.mirrorX) paintPixel(state.width - 1 - drawX, drawY);
 
-                if (state.mirrorX) {
+                if (state.mirrorY) paintPixel(drawX, state.height - 1 - drawY);
 
-                    paintPixel(state.width - 1 - drawX, drawY);
-
-                }
-
-                // 3. Mirror Y
-
-                if (state.mirrorY) {
-
-                    paintPixel(drawX, state.height - 1 - drawY);
-
-                }
-
-                // 4. Quad (X + Y)
-
-                if (state.mirrorX && state.mirrorY) {
-
-                    paintPixel(state.width - 1 - drawX, state.height - 1 - drawY);
-
-                }
+                if (state.mirrorX && state.mirrorY) paintPixel(state.width - 1 - drawX, state.height - 1 - drawY);
 
             }
 
@@ -908,6 +921,167 @@
         renderEditor(); 
 
     }
+
+    // --- SHAPE ALGORITHMS ---
+
+    // Generic painter for shapes
+
+    function paintPoint(px, py, r, g, b, a) {
+
+        const frameData = state.frames[state.currentFrameIndex];
+
+        const offset = Math.floor(state.brushSize / 2);
+
+        const setP = (tx, ty) => {
+
+            if (tx >= 0 && tx < state.width && ty >= 0 && ty < state.height) {
+
+                const idx = (ty * state.width + tx) * 4;
+
+                if(a === 0) {
+
+                    frameData.data[idx+3] = 0;
+
+                } else {
+
+                    frameData.data[idx] = r;
+
+                    frameData.data[idx+1] = g;
+
+                    frameData.data[idx+2] = b;
+
+                    frameData.data[idx+3] = 255;
+
+                }
+
+            }
+
+        };
+
+        for (let ix = 0; ix < state.brushSize; ix++) {
+
+            for (let iy = 0; iy < state.brushSize; iy++) {
+
+                const drawX = px - offset + ix;
+
+                const drawY = py - offset + iy;
+
+                setP(drawX, drawY);
+
+                if (state.mirrorX) setP(state.width - 1 - drawX, drawY);
+
+                if (state.mirrorY) setP(drawX, state.height - 1 - drawY);
+
+                if (state.mirrorX && state.mirrorY) setP(state.width - 1 - drawX, state.height - 1 - drawY);
+
+            }
+
+        }
+
+    }
+
+    function applyLine(x0, y0, x1, y1) {
+
+        const points = getLinePoints(x0, y0, x1, y1);
+
+        const bigint = parseInt(state.color.slice(1), 16);
+
+        const r = (bigint >> 16) & 255;
+
+        const g = (bigint >> 8) & 255;
+
+        const b = bigint & 255;
+
+        points.forEach(([px, py]) => paintPoint(px, py, r, g, b, 255));
+
+    }
+
+    function applyRect(x0, y0, x1, y1) {
+
+        // Compose rect of 4 lines
+
+        applyLine(x0, y0, x1, y0); // Top
+
+        applyLine(x0, y1, x1, y1); // Bottom
+
+        applyLine(x0, y0, x0, y1); // Left
+
+        applyLine(x1, y0, x1, y1); // Right
+
+    }
+
+    function applyEllipse(x0, y0, x1, y1) {
+
+        const bigint = parseInt(state.color.slice(1), 16);
+
+        const r = (bigint >> 16) & 255;
+
+        const g = (bigint >> 8) & 255;
+
+        const b = bigint & 255;
+
+        // Simple trigonometric ellipse iteration
+
+        // Not perfectly robust for small pixel circles but works well for general usage
+
+        const cx = (x0 + x1) / 2;
+
+        const cy = (y0 + y1) / 2;
+
+        const rx = Math.abs(x1 - x0) / 2;
+
+        const ry = Math.abs(y1 - y0) / 2;
+
+        // Circumference approximation to determine step size
+
+        const circum = 2 * Math.PI * Math.sqrt((rx*rx + ry*ry) / 2);
+
+        const step = 1 / (circum * 1.5); // Oversample to avoid gaps
+
+        for (let t = 0; t <= 2 * Math.PI; t += step) {
+
+            const px = Math.round(cx + rx * Math.cos(t));
+
+            const py = Math.round(cy + ry * Math.sin(t));
+
+            paintPoint(px, py, r, g, b, 255);
+
+        }
+
+    }
+
+    function getLinePoints(x0, y0, x1, y1) {
+
+        const points = [];
+
+        const dx = Math.abs(x1 - x0);
+
+        const dy = Math.abs(y1 - y0);
+
+        const sx = (x0 < x1) ? 1 : -1;
+
+        const sy = (y0 < y1) ? 1 : -1;
+
+        let err = dx - dy;
+
+        while (true) {
+
+            points.push([x0, y0]);
+
+            if (x0 === x1 && y0 === y1) break;
+
+            const e2 = 2 * err;
+
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+
+            if (e2 < dx) { err += dx; y0 += sy; }
+
+        }
+
+        return points;
+
+    }
+
 
     // --- FLOOD FILL ---
 
@@ -921,8 +1095,6 @@
 
         const height = state.height;
 
-        // Target Color
-
         const startIdx = (startY * width + startX) * 4;
 
         const startR = frameData.data[startIdx];
@@ -933,8 +1105,6 @@
 
         const startA = frameData.data[startIdx+3];
 
-        // Fill Color
-
         const bigint = parseInt(hexColor.slice(1), 16);
 
         const fillR = (bigint >> 16) & 255;
@@ -944,8 +1114,6 @@
         const fillB = bigint & 255;
 
         const fillA = 255;
-
-        // If same color, stop
 
         if (startR === fillR && startG === fillG && startB === fillB && startA === fillA) return;
 
@@ -1023,7 +1191,7 @@
 
                 ctx.save();
 
-                ctx.globalAlpha = 0.3; // 30% Opacity
+                ctx.globalAlpha = 0.3; 
 
                 ctx.imageSmoothingEnabled = false;
 
@@ -1085,93 +1253,145 @@
 
         }
 
-        // 5. Cursor
+        // 5. Cursor & Shape Preview
 
         if (state.mouseX >= 0 && state.mouseY >= 0) {
 
-            const drawSize = state.brushSize * state.scale;
+            const drawVisuals = (mx, my, isStart, tx, ty) => {
 
-            const offset = Math.floor(state.brushSize / 2); 
+                const offset = Math.floor(state.brushSize / 2);
 
-            // Helper to draw cursor at a specific X,Y
+                // SHAPE PREVIEWS
 
-            const drawCursor = (mx, my) => {
-
-                const drawX = (mx - offset) * state.scale;
-
-                const drawY = (my - offset) * state.scale;
-
-                ctx.lineWidth = 2;
-
-                if (state.tool === 'eraser') {
-
-                    ctx.strokeStyle = '#ff3333'; 
-
-                    ctx.strokeRect(drawX, drawY, drawSize, drawSize);
-
-                } else if (state.tool === 'picker') {
-
-                    ctx.strokeStyle = '#fff';
-
-                    ctx.strokeRect(mx * state.scale, my * state.scale, state.scale, state.scale); 
-
-                } else if (state.tool === 'bucket') {
-
-                    ctx.strokeStyle = state.color;
-
-                    ctx.strokeRect(mx * state.scale, my * state.scale, state.scale, state.scale); 
-
-                    ctx.fillStyle = state.color;
+                if (state.isDrawing) {
 
                     ctx.beginPath();
 
-                    const bx = mx * state.scale + state.scale/2;
+                    ctx.strokeStyle = state.color;
 
-                    const by = my * state.scale + state.scale/2;
+                    ctx.lineWidth = state.brushSize * state.scale;
 
-                    ctx.arc(bx, by, 3, 0, Math.PI*2);
+                    ctx.lineCap = "square";
 
-                    ctx.fill();
+                    const x0 = (isStart ? mx : tx) * state.scale + state.scale/2;
 
-                } else {
+                    const y0 = (isStart ? my : ty) * state.scale + state.scale/2;
 
-                    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+                    const x1 = mx * state.scale + state.scale/2;
 
-                    ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+                    const y1 = my * state.scale + state.scale/2;
 
-                    ctx.fillStyle = state.color + '80'; 
+                    if (state.tool === 'line') {
 
-                    ctx.fillRect(drawX, drawY, drawSize, drawSize);
+                        ctx.moveTo(x0, y0);
+
+                        ctx.lineTo(x1, y1);
+
+                        ctx.stroke();
+
+                    } else if (state.tool === 'rect') {
+
+                        ctx.strokeRect(x0, y0, x1-x0, y1-y0);
+
+                    } else if (state.tool === 'circle') {
+
+                        ctx.beginPath();
+
+                        const cx = (x0 + x1) / 2;
+
+                        const cy = (y0 + y1) / 2;
+
+                        const rx = Math.abs(x1 - x0) / 2;
+
+                        const ry = Math.abs(y1 - y0) / 2;
+
+                        ctx.ellipse(cx, cy, rx, ry, 0, 0, 2 * Math.PI);
+
+                        ctx.stroke();
+
+                    }
+
+                }
+
+                // TOOL CURSOR
+
+                // Don't draw cursor if dragging a shape, it gets messy
+
+                if (!state.isDrawing || state.tool === 'pen' || state.tool === 'eraser') {
+
+                    const drawX = (mx - offset) * state.scale;
+
+                    const drawY = (my - offset) * state.scale;
+
+                    const drawSize = state.brushSize * state.scale;
+
+                    if (state.tool === 'eraser') {
+
+                        ctx.strokeStyle = '#ff3333'; 
+
+                        ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+
+                    } else if (state.tool === 'picker') {
+
+                        ctx.strokeStyle = '#fff';
+
+                        ctx.strokeRect(mx * state.scale, my * state.scale, state.scale, state.scale); 
+
+                    } else if (state.tool === 'bucket') {
+
+                        ctx.strokeStyle = state.color;
+
+                        ctx.strokeRect(mx * state.scale, my * state.scale, state.scale, state.scale); 
+
+                    } else {
+
+                        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+
+                        ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+
+                        ctx.fillStyle = state.color + '80'; 
+
+                        ctx.fillRect(drawX, drawY, drawSize, drawSize);
+
+                    }
 
                 }
 
             };
 
-            // Draw Real Cursor
+            const mx = state.mouseX;
 
-            drawCursor(state.mouseX, state.mouseY);
+            const my = state.mouseY;
 
-            // Draw Mirror X
+            const sx = state.startDragX;
+
+            const sy = state.startDragY;
+
+            // 1. Original
+
+            drawVisuals(mx, my, false, sx, sy);
+
+            // 2. Mirror X
 
             if (state.mirrorX) {
 
-                drawCursor(state.width - 1 - state.mouseX, state.mouseY);
+                drawVisuals(state.width - 1 - mx, my, false, state.width - 1 - sx, sy);
 
             }
 
-            // Draw Mirror Y
+            // 3. Mirror Y
 
             if (state.mirrorY) {
 
-                drawCursor(state.mouseX, state.height - 1 - state.mouseY);
+                drawVisuals(mx, state.height - 1 - my, false, sx, state.height - 1 - sy);
 
             }
 
-            // Draw Quad
+            // 4. Quad
 
             if (state.mirrorX && state.mirrorY) {
 
-                drawCursor(state.width - 1 - state.mouseX, state.height - 1 - state.mouseY);
+                drawVisuals(state.width - 1 - mx, state.height - 1 - my, false, state.width - 1 - sx, state.height - 1 - sy);
 
             }
 
@@ -1312,6 +1532,12 @@
                 case 'i': setTool('picker'); break;
 
                 case 'b': setTool('bucket'); break;
+
+                case 'l': setTool('line'); break;
+
+                case 'r': setTool('rect'); break;
+
+                case 'c': setTool('circle'); break;
 
                 case 'g': toggleGrid(); break;
 
@@ -1714,6 +1940,12 @@
         if(name === 'picker') document.getElementById('btn-picker').classList.add('active');
 
         if(name === 'bucket') document.getElementById('btn-bucket').classList.add('active');
+
+        if(name === 'line') document.getElementById('btn-line').classList.add('active');
+
+        if(name === 'rect') document.getElementById('btn-rect').classList.add('active');
+
+        if(name === 'circle') document.getElementById('btn-circle').classList.add('active');
 
         renderEditor(); 
 

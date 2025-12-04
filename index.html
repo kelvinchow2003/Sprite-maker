@@ -198,7 +198,6 @@
             width: 100%; box-sizing: border-box;
         }
 
-        /* --- UPDATED PALETTE STYLES --- */
         .palette {
             display: grid; 
             grid-template-columns: repeat(4, 1fr); 
@@ -207,14 +206,12 @@
             padding: 5px; 
             background: rgba(0,0,0,0.1); 
             border-radius: 4px;
-            /* Scroll Logic */
-            max-height: 160px; /* Shows approx 4 rows */
+            max-height: 160px;
             overflow-y: auto; 
             scrollbar-width: thin;
             scrollbar-color: #555 #2b2b2b;
         }
-
-        /* Custom Scrollbar for Chrome/Safari */
+        
         .palette::-webkit-scrollbar { width: 6px; }
         .palette::-webkit-scrollbar-track { background: #2b2b2b; }
         .palette::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
@@ -224,8 +221,7 @@
         }
 
         .swatch.drag-over { border: 2px dashed white; opacity: 0.5; }
-        
-        /* New Add Button Style */
+
         .btn-add-color {
             height: 35px;
             border: 2px dashed #555;
@@ -282,10 +278,17 @@
             display: none; justify-content: center; align-items: center; color: white; font-size: 2em;
             font-weight: bold; pointer-events: none; z-index: 100;
         }
+        
+        #autosave-indicator {
+            position: fixed; top: 10px; right: 10px; background: rgba(40, 167, 69, 0.9); color: white;
+            padding: 5px 10px; border-radius: 4px; font-size: 0.8em; opacity: 0; pointer-events: none; transition: opacity 0.5s;
+            z-index: 1000; box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
 </style>
 </head>
 <body>
 <div id="paste-overlay">Processing Image...</div>
+<div id="autosave-indicator">💾 Saved</div>
 <div class="sidebar">
 <h1 class="app-title">Kelvin's<br>Sprite Creator</h1>
 <div>
@@ -412,8 +415,15 @@
     const frameList = document.getElementById('frame-list');
 
     function init() {
-        resizeCanvas();
-        addFrame(); 
+        // Try to load state. If it returns false (no save file), initialize defaults.
+        if (!loadState()) {
+            resizeCanvas();
+            addFrame(); 
+        } else {
+            resizeCanvas(); // Resize based on loaded width/height
+            renderFrameList();
+        }
+
         renderPalette(); 
         startAnimationLoop();
 
@@ -435,6 +445,7 @@
         document.getElementById('fps-slider').addEventListener('input', (e) => {
             state.fps = parseInt(e.target.value);
             document.getElementById('fps-display').innerText = state.fps;
+            saveState(); // Save FPS changes
         });
         document.getElementById('btn-play').addEventListener('click', () => {
              state.isPlaying = !state.isPlaying;
@@ -453,6 +464,69 @@
 
         setupDragSource();
         updateColor('#000000');
+    }
+
+    // --- AUTO SAVE SYSTEM ---
+    
+    function saveState() {
+        try {
+            // We convert ImageData to simple arrays because localStorage stores strings
+            const data = {
+                width: state.width,
+                height: state.height,
+                fps: state.fps,
+                palette: state.palette,
+                frames: state.frames.map(f => Array.from(f.data)) // Convert Uint8ClampedArray to standard Array
+            };
+            localStorage.setItem('spriteCreatorData', JSON.stringify(data));
+            showSaveIndicator();
+        } catch (e) {
+            console.error("Auto-save failed (likely storage full):", e);
+        }
+    }
+
+    function loadState() {
+        const raw = localStorage.getItem('spriteCreatorData');
+        if (!raw) return false;
+
+        try {
+            const data = JSON.parse(raw);
+            
+            // Validation to ensure data isn't corrupt
+            if(!data.width || !data.height || !data.frames) return false;
+
+            state.width = data.width;
+            state.height = data.height;
+            state.fps = data.fps || 8;
+            state.palette = data.palette || state.palette;
+            
+            // Restore frames from Arrays to ImageData
+            state.frames = data.frames.map(fData => {
+                const u8 = new Uint8ClampedArray(fData);
+                return new ImageData(u8, state.width, state.height);
+            });
+            
+            state.currentFrameIndex = 0;
+
+            // Sync UI elements to loaded state
+            document.getElementById('size-input').value = state.width;
+            document.getElementById('fps-slider').value = state.fps;
+            document.getElementById('fps-display').innerText = state.fps;
+
+            return true;
+        } catch (e) {
+            console.error("Save file corrupt, starting fresh:", e);
+            return false;
+        }
+    }
+
+    function showSaveIndicator() {
+        const indicator = document.getElementById('autosave-indicator');
+        indicator.style.opacity = 1;
+        if(state.saveTimeout) clearTimeout(state.saveTimeout);
+        state.saveTimeout = setTimeout(() => {
+            indicator.style.opacity = 0;
+        }, 1000);
     }
 
     // --- UTILS ---
@@ -525,6 +599,7 @@
             commitToHistory();
             renderEditor();
             updateFrameThumb(state.currentFrameIndex);
+            saveState(); // Save on fill
             return;
         }
 
@@ -545,6 +620,7 @@
             state.paintedPixels.clear();
             updateFrameThumb(state.currentFrameIndex);
             commitToHistory(); 
+            saveState(); // Save on draw end
         }
     }
 
@@ -941,6 +1017,7 @@
         if (state.historyIndex > 0) {
             state.historyIndex--;
             restoreFromHistory();
+            saveState(); // Update save on undo
         }
     }
 
@@ -948,6 +1025,7 @@
         if (state.historyIndex < state.history.length - 1) {
             state.historyIndex++;
             restoreFromHistory();
+            saveState(); // Update save on redo
         }
     }
 
@@ -1032,7 +1110,6 @@
         });
     }
 
-    // --- NEW: RENDER PALETTE WITH ADD BUTTON ---
     function renderPalette() {
         const container = document.getElementById('palette-container');
         container.innerHTML = '';
@@ -1046,12 +1123,12 @@
 
             div.onclick = () => { updateColor(color); setTool('pen'); };
             
-            // Allow deleting slots (keep at least 1)
             div.oncontextmenu = (e) => {
                 e.preventDefault();
                 if(state.palette.length > 1) {
                     state.palette.splice(idx, 1);
                     renderPalette();
+                    saveState(); // Save on palette change
                 }
             };
 
@@ -1075,12 +1152,12 @@
                     state.palette.splice(idx, 0, movedColor);
                 }
                 renderPalette();
+                saveState(); // Save on reorder/drop
             });
 
             container.appendChild(div);
         });
 
-        // Add Button
         const addBtn = document.createElement('div');
         addBtn.className = 'btn-add-color';
         addBtn.innerHTML = '+';
@@ -1089,15 +1166,12 @@
         container.appendChild(addBtn);
     }
 
-    // --- NEW: ADD COLOR SLOT FUNCTION ---
     function addColorSlot() {
-        // Add default white or last used color
         state.palette.push('#ffffff'); 
         renderPalette();
-        
-        // Auto-scroll to bottom
         const container = document.getElementById('palette-container');
         setTimeout(() => container.scrollTop = container.scrollHeight, 10);
+        saveState(); // Save on new color
     }
 
     function updateColor(hex) {
@@ -1151,7 +1225,6 @@
             tempCtx.drawImage(img, 0, 0, state.width, state.height);
             
             const newData = tempCtx.getImageData(0, 0, state.width, state.height);
-            // Simple transparency keying for white background imports if needed
             for (let i = 0; i < newData.data.length; i += 4) {
                 if (newData.data[i] > 250 && newData.data[i+1] > 250 && newData.data[i+2] > 250) newData.data[i+3] = 0;
             }
@@ -1160,6 +1233,7 @@
             commitToHistory(); 
             renderEditor();
             updateFrameThumb(state.currentFrameIndex);
+            saveState(); // Save on import
         };
         img.src = sourceUrl;
     }
@@ -1167,11 +1241,13 @@
     function resizeGrid() {
         const newSize = parseInt(document.getElementById('size-input').value);
         if(newSize < 8 || newSize > 64) return alert('Size must be between 8 and 64');
-        if(!confirm("Changing size will clear current work. Continue?")) return;
+        if(!confirm("Changing size will clear current work and auto-save. Continue?")) return;
         
         state.width = newSize; state.height = newSize;
         state.frames = []; state.currentFrameIndex = 0; state.history = []; state.historyIndex = -1;
-        resizeCanvas(); addFrame();
+        resizeCanvas(); 
+        addFrame(); 
+        saveState(); // Save on resize (essentially resets the save file)
     }
 
     function resizeCanvas() {
@@ -1189,6 +1265,7 @@
         commitToHistory();
         renderEditor();
         updateFrameThumb(state.currentFrameIndex);
+        saveState(); // Save on clear
     }
 
     function addFrame() {
@@ -1198,6 +1275,7 @@
         commitToHistory(); 
         renderFrameList();
         renderEditor();
+        saveState(); // Save on new frame
     }
 
     function duplicateFrame() {
@@ -1208,6 +1286,7 @@
         commitToHistory();
         renderFrameList();
         renderEditor();
+        saveState(); // Save on duplicate
     }
 
     function deleteFrame() {
@@ -1217,6 +1296,7 @@
         commitToHistory();
         renderFrameList();
         renderEditor();
+        saveState(); // Save on delete
     }
 
     function renderFrameList() {

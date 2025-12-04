@@ -926,66 +926,111 @@
             ctx.stroke();
         }
 
-        // 5. Cursor & Shape Preview
+        // 5. Cursor & Shape Preview (UPDATED for High Contrast + Rect Fix)
         if (state.mouseX >= 0 && state.mouseY >= 0) {
             const drawVisuals = (mx, my, isStart, tx, ty) => {
                 const offset = Math.floor(state.brushSize / 2);
                 
-                // SHAPE PREVIEWS
-                if (state.isDrawing) {
+                // --- SHAPE PREVIEWS (Line, Rect, Circle) ---
+                if (state.isDrawing && ['line', 'rect', 'circle'].includes(state.tool)) {
                     ctx.beginPath();
-                    ctx.strokeStyle = state.color;
-                    ctx.lineWidth = state.brushSize * state.scale;
+                    // Draw strong contrast for shape previews
+                    ctx.strokeStyle = "rgba(0,0,0,0.5)"; // Shadow trace
+                    ctx.lineWidth = (state.brushSize * state.scale) + 2;
                     ctx.lineCap = "square";
                     
                     const x0 = (isStart ? mx : tx) * state.scale + state.scale/2;
                     const y0 = (isStart ? my : ty) * state.scale + state.scale/2;
                     const x1 = mx * state.scale + state.scale/2;
                     const y1 = my * state.scale + state.scale/2;
+                    
+                    const traceShape = () => {
+                        if (state.tool === 'line') {
+                            ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+                        } else if (state.tool === 'rect') {
+                            // Fix: Use ctx.rect to define path (prevents double drawing)
+                            ctx.rect(x0, y0, x1 - x0, y1 - y0);
+                        } else if (state.tool === 'circle') {
+                             const cx = (x0 + x1) / 2;
+                             const cy = (y0 + y1) / 2;
+                             const rx = Math.abs(x1 - x0) / 2;
+                             const ry = Math.abs(y1 - y0) / 2;
+                             ctx.ellipse(cx, cy, rx, ry, 0, 0, 2 * Math.PI);
+                        }
+                    };
 
-                    if (state.tool === 'line') {
-                        ctx.moveTo(x0, y0);
-                        ctx.lineTo(x1, y1);
-                        ctx.stroke();
-                    } else if (state.tool === 'rect') {
-                        ctx.strokeRect(x0, y0, x1-x0, y1-y0);
-                    } else if (state.tool === 'circle') {
-                        ctx.beginPath();
-                        const cx = (x0 + x1) / 2;
-                        const cy = (y0 + y1) / 2;
-                        const rx = Math.abs(x1 - x0) / 2;
-                        const ry = Math.abs(y1 - y0) / 2;
-                        ctx.ellipse(cx, cy, rx, ry, 0, 0, 2 * Math.PI);
-                        ctx.stroke();
-                    }
+                    // Draw Shadow
+                    traceShape(); 
+                    ctx.stroke();
+
+                    // Draw Actual Color
+                    ctx.beginPath();
+                    ctx.strokeStyle = state.color;
+                    ctx.lineWidth = state.brushSize * state.scale;
+                    traceShape();
+                    ctx.stroke();
                 }
 
-                // TOOL CURSOR
-                if (!state.isDrawing || ['pen', 'eraser', 'lighten', 'darken'].includes(state.tool)) {
+                // --- TOOL CURSOR (The Box) ---
+                if (!state.isDrawing || ['pen', 'eraser', 'lighten', 'darken', 'picker', 'bucket'].includes(state.tool)) {
                     const drawX = (mx - offset) * state.scale;
                     const drawY = (my - offset) * state.scale;
                     const drawSize = state.brushSize * state.scale;
 
+                    // 1. Fill Preview
+                    if (['pen', 'bucket', 'rect', 'circle', 'line'].includes(state.tool)) {
+                        ctx.fillStyle = state.color;
+                        ctx.globalAlpha = 0.3; // Gentle tint
+                        ctx.fillRect(drawX, drawY, drawSize, drawSize);
+                        ctx.globalAlpha = 1.0;
+                    }
+
+                    // 2. High Visibility Outline helper
+                    const drawCrispBox = (colorOuter, colorInner) => {
+                        // Outer Thick Line
+                        ctx.lineWidth = 3;
+                        ctx.strokeStyle = colorOuter;
+                        ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+                        
+                        // Inner Thin Line (draws on top of thick)
+                        ctx.lineWidth = 1;
+                        ctx.strokeStyle = colorInner;
+                        ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+                    };
+
+                    // 3. Tool Specific Styling
                     if (state.tool === 'eraser') {
-                        ctx.strokeStyle = '#ff3333'; 
-                        ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+                        drawCrispBox('#ffffff', '#ff0000'); // White outline, Red inner
+                        
+                        // Draw 'X' for eraser
+                        ctx.beginPath();
+                        ctx.strokeStyle = '#ff0000';
+                        ctx.moveTo(drawX, drawY); ctx.lineTo(drawX + drawSize, drawY + drawSize);
+                        ctx.moveTo(drawX + drawSize, drawY); ctx.lineTo(drawX, drawY + drawSize);
+                        ctx.stroke();
+
                     } else if (state.tool === 'picker') {
-                        ctx.strokeStyle = '#fff';
-                        ctx.strokeRect(mx * state.scale, my * state.scale, state.scale, state.scale); 
-                    } else if (state.tool === 'bucket') {
-                        ctx.strokeStyle = state.color;
-                        ctx.strokeRect(mx * state.scale, my * state.scale, state.scale, state.scale); 
+                        drawCrispBox('#000000', '#ffffff'); // Standard Black/White
+                        
+                        // Crosshair for precision
+                        ctx.beginPath();
+                        ctx.strokeStyle = '#ffffff'; 
+                        ctx.lineWidth = 2;
+                        // Vertical
+                        ctx.moveTo(drawX + drawSize/2, drawY + drawSize/2 - 5);
+                        ctx.lineTo(drawX + drawSize/2, drawY + drawSize/2 + 5);
+                        // Horizontal
+                        ctx.moveTo(drawX + drawSize/2 - 5, drawY + drawSize/2);
+                        ctx.lineTo(drawX + drawSize/2 + 5, drawY + drawSize/2);
+                        ctx.stroke();
+
                     } else if (state.tool === 'lighten') {
-                        ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
-                        ctx.fillRect(drawX, drawY, drawSize, drawSize);
+                        drawCrispBox('#000000', '#ffff00'); // Yellow inner
                     } else if (state.tool === 'darken') {
-                        ctx.fillStyle = 'rgba(100, 0, 255, 0.3)';
-                        ctx.fillRect(drawX, drawY, drawSize, drawSize);
+                        drawCrispBox('#ffffff', '#0000aa'); // Blue inner
                     } else {
-                        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-                        ctx.strokeRect(drawX, drawY, drawSize, drawSize);
-                        ctx.fillStyle = state.color + '80'; 
-                        ctx.fillRect(drawX, drawY, drawSize, drawSize);
+                        // Standard Pen/Bucket
+                        drawCrispBox('rgba(0,0,0,0.8)', '#ffffff');
                     }
                 }
             };
@@ -995,20 +1040,24 @@
             const sx = state.startDragX;
             const sy = state.startDragY;
 
-            // 1. Original
+            // 1. Original Cursor
             drawVisuals(mx, my, false, sx, sy);
-            // 2. Mirror X
+            
+            // 2. Mirror Visuals (Ghost Cursors)
+            const originalAlpha = ctx.globalAlpha;
+            ctx.globalAlpha = 0.6; 
+            
             if (state.mirrorX) {
                 drawVisuals(state.width - 1 - mx, my, false, state.width - 1 - sx, sy);
             }
-            // 3. Mirror Y
             if (state.mirrorY) {
                 drawVisuals(mx, state.height - 1 - my, false, sx, state.height - 1 - sy);
             }
-            // 4. Quad
             if (state.mirrorX && state.mirrorY) {
                 drawVisuals(state.width - 1 - mx, state.height - 1 - my, false, state.width - 1 - sx, state.height - 1 - sy);
             }
+            
+            ctx.globalAlpha = originalAlpha;
         }
     }
 

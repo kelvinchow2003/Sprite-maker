@@ -294,6 +294,7 @@
 <div>
 <h3>Tools</h3>
 <div class="tool-group">
+<button id="btn-select" onclick="setTool('select')" title="Select/Move (S) | Ctrl+Click to Add Pixel">✂️</button>
 <button id="btn-pen" class="active" onclick="setTool('pen')" title="Pen (P)">✏️</button>
 <button id="btn-eraser" onclick="setTool('eraser')" title="Eraser (E)">🧹</button>
 <button id="btn-picker" onclick="setTool('picker')" title="Picker (I)">🧪</button>
@@ -402,7 +403,17 @@
         showOnionSkin: false,
         mirrorX: false, 
         mirrorY: false,
-        paintedPixels: new Set() 
+        paintedPixels: new Set(),
+        
+        // SELECTION STATE
+        selection: {
+            active: false,
+            x: 0, y: 0, w: 0, h: 0,
+            buffer: null, 
+            isDragging: false,
+            originX: 0, originY: 0
+        },
+        clipboard: null 
     };
 
     const canvas = document.getElementById('editor-canvas');
@@ -415,12 +426,11 @@
     const frameList = document.getElementById('frame-list');
 
     function init() {
-        // Try to load state. If it returns false (no save file), initialize defaults.
         if (!loadState()) {
             resizeCanvas();
             addFrame(); 
         } else {
-            resizeCanvas(); // Resize based on loaded width/height
+            resizeCanvas();
             renderFrameList();
         }
 
@@ -433,7 +443,6 @@
         canvas.addEventListener('mousemove', (e) => { trackMouse(e); draw(e); });
         canvas.addEventListener('mouseleave', () => { state.mouseX = -1; renderEditor(); });
 
-        // Mobile Support
         canvas.addEventListener('touchstart', (e) => { e.preventDefault(); trackTouch(e); startDraw(e); }, {passive: false});
         canvas.addEventListener('touchmove', (e) => { e.preventDefault(); trackTouch(e); draw(e); }, {passive: false});
         canvas.addEventListener('touchend', (e) => { e.preventDefault(); endDraw(); });
@@ -441,11 +450,10 @@
         window.addEventListener('keydown', handleShortcuts);
         window.addEventListener('paste', handlePaste);
 
-        // UI Listeners
         document.getElementById('fps-slider').addEventListener('input', (e) => {
             state.fps = parseInt(e.target.value);
             document.getElementById('fps-display').innerText = state.fps;
-            saveState(); // Save FPS changes
+            saveState();
         });
         document.getElementById('btn-play').addEventListener('click', () => {
              state.isPlaying = !state.isPlaying;
@@ -466,56 +474,233 @@
         updateColor('#000000');
     }
 
-    // --- AUTO SAVE SYSTEM ---
+    // --- SELECTION LOGIC ---
+    function isMouseInSelection(x, y) {
+        if (!state.selection.active) return false;
+        return x >= state.selection.x && x < state.selection.x + state.selection.w &&
+               y >= state.selection.y && y < state.selection.y + state.selection.h;
+    }
+
+    function captureSelection() {
+        const frame = state.frames[state.currentFrameIndex];
+        let selX = state.selection.x;
+        let selY = state.selection.y;
+        let selW = state.selection.w;
+        let selH = state.selection.h;
+
+        if (!state.selection.active) {
+            selX = 0; selY = 0;
+            selW = state.width; selH = state.height;
+        }
+
+        const rawData = new ImageData(selW, selH);
+        for(let py=0; py<selH; py++) {
+            for(let px=0; px<selW; px++) {
+                if(selX + px >= 0 && selX + px < state.width && selY + py >= 0 && selY + py < state.height) {
+                    const srcIdx = ((selY + py) * state.width + (selX + px)) * 4;
+                    const dstIdx = (py * selW + px) * 4;
+                    rawData.data[dstIdx] = frame.data[srcIdx];
+                    rawData.data[dstIdx+1] = frame.data[srcIdx+1];
+                    rawData.data[dstIdx+2] = frame.data[srcIdx+2];
+                    rawData.data[dstIdx+3] = frame.data[srcIdx+3];
+                }
+            }
+        }
+        return rawData;
+    }
+
+    function eraseUnderSelection() {
+         const frame = state.frames[state.currentFrameIndex];
+         for(let py=0; py<state.selection.h; py++) {
+            for(let px=0; px<state.selection.w; px++) {
+                const tx = state.selection.x + px;
+                const ty = state.selection.y + py;
+                if(tx >= 0 && tx < state.width && ty >= 0 && ty < state.height) {
+                    const srcIdx = (ty * state.width + tx) * 4;
+                    frame.data[srcIdx+3] = 0; 
+                }
+            }
+        }
+    }
+
+    function liftSelection() {
+        if (state.selection.buffer) return; 
+        state.selection.buffer = captureSelection();
+        eraseUnderSelection();
+        state.selection.isDragging = true;
+        state.selection.originX = state.mouseX - state.selection.x;
+        state.selection.originY = state.mouseY - state.selection.y;
+    }
+
+    // --- ADDITIVE PIXEL SELECTION (Ctrl + Click) ---
+    function addPixelToSelection(x, y) {
+        if (x < 0 || x >= state.width || y < 0 || y >= state.height) return;
+
+        // If no existing selection, start one
+        if (!state.selection.active || !state.selection.buffer) {
+            state.selection.x = x;
+            state.selection.y = y;
+            state.selection.w = 1;
+            state.selection.h = 1;
+            state.selection.buffer = captureSelection();
+            eraseUnderSelection();
+            state.selection.active = true;
+            renderEditor();
+            return;
+        }
+
+        // Expand existing buffer
+        const oldX = state.selection.x;
+        const oldY = state.selection.y;
+        const oldW = state.selection.w;
+        const oldH = state.selection.h;
+        const oldBuf = state.selection.buffer;
+
+        // Determine new bounds
+        const newX = Math.min(oldX, x);
+        const newY = Math.min(oldY, y);
+        const maxX = Math.max(oldX + oldW, x + 1);
+        const maxY = Math.max(oldY + oldH, y + 1);
+        const newW = maxX - newX;
+        const newH = maxY - newY;
+
+        const newBuf = new ImageData(newW, newH);
+
+        // 1. Copy old buffer to new offset
+        for(let py=0; py<oldH; py++){
+            for(let px=0; px<oldW; px++){
+                const srcIdx = (py * oldW + px) * 4;
+                if(oldBuf.data[srcIdx+3] > 0) {
+                    const dstX = (oldX + px) - newX;
+                    const dstY = (oldY + py) - newY;
+                    const dstIdx = (dstY * newW + dstX) * 4;
+                    newBuf.data[dstIdx] = oldBuf.data[srcIdx];
+                    newBuf.data[dstIdx+1] = oldBuf.data[srcIdx+1];
+                    newBuf.data[dstIdx+2] = oldBuf.data[srcIdx+2];
+                    newBuf.data[dstIdx+3] = oldBuf.data[srcIdx+3];
+                }
+            }
+        }
+
+        // 2. Add the NEW pixel from canvas (if valid)
+        const frame = state.frames[state.currentFrameIndex];
+        const srcIdx = (y * state.width + x) * 4;
+        
+        // Only pick up if it exists on canvas (and isn't erased)
+        if (frame.data[srcIdx+3] > 0) {
+            const dstX = x - newX;
+            const dstY = y - newY;
+            const dstIdx = (dstY * newW + dstX) * 4;
+            
+            newBuf.data[dstIdx] = frame.data[srcIdx];
+            newBuf.data[dstIdx+1] = frame.data[srcIdx+1];
+            newBuf.data[dstIdx+2] = frame.data[srcIdx+2];
+            newBuf.data[dstIdx+3] = frame.data[srcIdx+3];
+            
+            // Remove from canvas
+            frame.data[srcIdx+3] = 0;
+        }
+
+        // Update State
+        state.selection.x = newX;
+        state.selection.y = newY;
+        state.selection.w = newW;
+        state.selection.h = newH;
+        state.selection.buffer = newBuf;
+        
+        renderEditor();
+    }
+
+    function anchorSelection() {
+        if (!state.selection.active || !state.selection.buffer) {
+            state.selection.active = false;
+            state.selection.buffer = null;
+            return;
+        }
+
+        const frame = state.frames[state.currentFrameIndex];
+        const buffer = state.selection.buffer;
+        
+        for(let py=0; py<state.selection.h; py++) {
+            for(let px=0; px<state.selection.w; px++) {
+                const targetX = state.selection.x + px;
+                const targetY = state.selection.y + py;
+                
+                if (targetX >= 0 && targetX < state.width && targetY >= 0 && targetY < state.height) {
+                    const srcIdx = (py * state.selection.w + px) * 4;
+                    const dstIdx = (targetY * state.width + targetX) * 4;
+                    
+                    if (buffer.data[srcIdx+3] > 0) {
+                        frame.data[dstIdx] = buffer.data[srcIdx];
+                        frame.data[dstIdx+1] = buffer.data[srcIdx+1];
+                        frame.data[dstIdx+2] = buffer.data[srcIdx+2];
+                        frame.data[dstIdx+3] = buffer.data[srcIdx+3];
+                    }
+                }
+            }
+        }
+
+        state.selection.active = false;
+        state.selection.buffer = null;
+        commitToHistory();
+        updateFrameThumb(state.currentFrameIndex);
+        renderEditor();
+    }
+
+    function deleteSelection() {
+        if(state.selection.active) {
+            if (!state.selection.buffer) {
+                 eraseUnderSelection();
+            }
+            state.selection.buffer = null;
+            state.selection.active = false;
+            commitToHistory();
+            renderEditor();
+        } else {
+            clearCanvas();
+        }
+    }
+
+
+    // --- STATE MANAGEMENT ---
     
     function saveState() {
         try {
-            // We convert ImageData to simple arrays because localStorage stores strings
             const data = {
                 width: state.width,
                 height: state.height,
                 fps: state.fps,
                 palette: state.palette,
-                frames: state.frames.map(f => Array.from(f.data)) // Convert Uint8ClampedArray to standard Array
+                frames: state.frames.map(f => Array.from(f.data)) 
             };
             localStorage.setItem('spriteCreatorData', JSON.stringify(data));
             showSaveIndicator();
         } catch (e) {
-            console.error("Auto-save failed (likely storage full):", e);
+            console.error("Auto-save failed:", e);
         }
     }
 
     function loadState() {
         const raw = localStorage.getItem('spriteCreatorData');
         if (!raw) return false;
-
         try {
             const data = JSON.parse(raw);
-            
-            // Validation to ensure data isn't corrupt
             if(!data.width || !data.height || !data.frames) return false;
-
             state.width = data.width;
             state.height = data.height;
             state.fps = data.fps || 8;
             state.palette = data.palette || state.palette;
-            
-            // Restore frames from Arrays to ImageData
             state.frames = data.frames.map(fData => {
                 const u8 = new Uint8ClampedArray(fData);
                 return new ImageData(u8, state.width, state.height);
             });
-            
             state.currentFrameIndex = 0;
-
-            // Sync UI elements to loaded state
             document.getElementById('size-input').value = state.width;
             document.getElementById('fps-slider').value = state.fps;
             document.getElementById('fps-display').innerText = state.fps;
-
             return true;
         } catch (e) {
-            console.error("Save file corrupt, starting fresh:", e);
+            console.error("Save file corrupt:", e);
             return false;
         }
     }
@@ -529,7 +714,6 @@
         }, 1000);
     }
 
-    // --- UTILS ---
     function toggleGrid() {
         state.showGrid = !state.showGrid;
         const btn = document.getElementById('btn-grid');
@@ -558,7 +742,6 @@
         renderEditor();
     }
 
-    // --- MOUSE & TOUCH TRACKING ---
     function trackMouse(e) {
         const rect = canvas.getBoundingClientRect();
         const scaleX = canvas.width / rect.width;
@@ -567,6 +750,14 @@
         const rawY = (e.clientY - rect.top) * scaleY;
         state.mouseX = Math.floor(rawX / state.scale);
         state.mouseY = Math.floor(rawY / state.scale);
+        
+        // Cursor Styling
+        if (state.tool === 'select' && isMouseInSelection(state.mouseX, state.mouseY)) {
+            canvas.style.cursor = 'move';
+        } else {
+            canvas.style.cursor = 'none';
+        }
+
         renderEditor(); 
     }
 
@@ -585,6 +776,39 @@
     // --- DRAWING LOGIC ---
     function startDraw(e) {
         if (e.type === 'mousedown' && e.button !== 0) return; 
+        
+        // Handle Select Tool
+        if (state.tool === 'select') {
+            // SINGLE PIXEL ADDITIVE SELECTION (Ctrl + Click)
+            if (e.ctrlKey) {
+                addPixelToSelection(state.mouseX, state.mouseY);
+                return;
+            }
+
+            // If clicking OUTSIDE selection, anchor current and start new
+            if (state.selection.active && !isMouseInSelection(state.mouseX, state.mouseY)) {
+                anchorSelection();
+            }
+
+            // If clicking INSIDE selection, start drag
+            if (state.selection.active && isMouseInSelection(state.mouseX, state.mouseY)) {
+                liftSelection(); // Ensure it's floating
+                state.selection.isDragging = true;
+                state.selection.originX = state.mouseX - state.selection.x;
+                state.selection.originY = state.mouseY - state.selection.y;
+                return;
+            }
+
+            // Start New Selection
+            state.startDragX = state.mouseX;
+            state.startDragY = state.mouseY;
+            state.isDrawing = true;
+            return;
+        }
+
+        // Anchor selection if drawing with another tool
+        if (state.selection.active) anchorSelection();
+
         state.startDragX = state.mouseX;
         state.startDragY = state.mouseY;
         state.paintedPixels.clear(); 
@@ -599,7 +823,7 @@
             commitToHistory();
             renderEditor();
             updateFrameThumb(state.currentFrameIndex);
-            saveState(); // Save on fill
+            saveState(); 
             return;
         }
 
@@ -608,6 +832,37 @@
     }
 
     function endDraw() {
+        // Handle Select Tool
+        if (state.tool === 'select') {
+            if (state.selection.isDragging) {
+                state.selection.isDragging = false;
+            } else if (state.isDrawing) {
+                // Finalize selection box
+                let x = Math.min(state.startDragX, state.mouseX);
+                let y = Math.min(state.startDragY, state.mouseY);
+                let w = Math.abs(state.mouseX - state.startDragX) + 1;
+                let h = Math.abs(state.mouseY - state.startDragY) + 1;
+                
+                // Clamp to canvas
+                x = Math.max(0, x); y = Math.max(0, y);
+                w = Math.min(state.width - x, w);
+                h = Math.min(state.height - y, h);
+
+                if (w > 0 && h > 0) {
+                    state.selection = {
+                        active: true,
+                        x: x, y: y, w: w, h: h,
+                        buffer: null,
+                        isDragging: false,
+                        originX: 0, originY: 0
+                    };
+                }
+                state.isDrawing = false;
+            }
+            renderEditor();
+            return;
+        }
+
         if (state.isDrawing) {
             if (state.tool === 'line') {
                 applyLine(state.startDragX, state.startDragY, state.mouseX, state.mouseY);
@@ -620,11 +875,22 @@
             state.paintedPixels.clear();
             updateFrameThumb(state.currentFrameIndex);
             commitToHistory(); 
-            saveState(); // Save on draw end
+            saveState(); 
         }
     }
 
     function draw(e) {
+        if (state.tool === 'select') {
+            if (state.selection.isDragging) {
+                state.selection.x = state.mouseX - state.selection.originX;
+                state.selection.y = state.mouseY - state.selection.originY;
+                renderEditor();
+            } else if (state.isDrawing) {
+                renderEditor(); // Updates the marquee box
+            }
+            return;
+        }
+
         if (!state.isDrawing) return;
 
         if (['line', 'rect', 'circle'].includes(state.tool)) {
@@ -639,7 +905,6 @@
 
         const frameData = state.frames[state.currentFrameIndex];
 
-        // Picker Logic
         if (state.tool === 'picker') {
             const idx = (y * state.width + x) * 4;
             const r = frameData.data[idx];
@@ -710,7 +975,6 @@
         renderEditor(); 
     }
 
-    // --- COLOR MATH (HSL/RGB) ---
     function rgbToHsl(r, g, b) {
         r /= 255, g /= 255, b /= 255;
         const max = Math.max(r, g, b), min = Math.min(r, g, b);
@@ -752,7 +1016,6 @@
         return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
     }
 
-    // --- SHAPE ALGORITHMS ---
     function paintPoint(px, py, r, g, b, a) {
         const frameData = state.frames[state.currentFrameIndex];
         const offset = Math.floor(state.brushSize / 2);
@@ -832,8 +1095,6 @@
         return points;
     }
 
-
-    // --- FLOOD FILL ---
     function floodFill(startX, startY, hexColor) {
         if (startX < 0 || startX >= state.width || startY < 0 || startY >= state.height) return;
         const frameData = state.frames[state.currentFrameIndex];
@@ -910,7 +1171,23 @@
             ctx.drawImage(tempCanvas, 0, 0, state.width * state.scale, state.height * state.scale);
         }
 
-        // 4. Grid Lines
+        // 4. FLOATING SELECTION (Draw this ABOVE frame)
+        if (state.selection.active && state.selection.buffer) {
+            const floatCanvas = document.createElement('canvas');
+            floatCanvas.width = state.selection.w;
+            floatCanvas.height = state.selection.h;
+            floatCanvas.getContext('2d').putImageData(state.selection.buffer, 0, 0);
+            
+            ctx.drawImage(
+                floatCanvas, 
+                state.selection.x * state.scale, 
+                state.selection.y * state.scale, 
+                state.selection.w * state.scale, 
+                state.selection.h * state.scale
+            );
+        }
+
+        // 5. Grid Lines
         if (state.showGrid) {
             ctx.strokeStyle = 'rgba(0,0,0,0.1)';
             ctx.lineWidth = 1;
@@ -926,16 +1203,62 @@
             ctx.stroke();
         }
 
-        // 5. Cursor & Shape Preview (UPDATED for High Contrast + Rect Fix)
-        if (state.mouseX >= 0 && state.mouseY >= 0) {
+        // 6. SELECTION BOX (Marching Ants)
+        if (state.tool === 'select' && (state.isDrawing || state.selection.active)) {
+            let sx, sy, sw, sh;
+            if (state.isDrawing) {
+                sx = Math.min(state.startDragX, state.mouseX);
+                sy = Math.min(state.startDragY, state.mouseY);
+                sw = Math.abs(state.mouseX - state.startDragX) + 1;
+                sh = Math.abs(state.mouseY - state.startDragY) + 1;
+            } else {
+                sx = state.selection.x;
+                sy = state.selection.y;
+                sw = state.selection.w;
+                sh = state.selection.h;
+            }
+
+            ctx.save();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(sx * state.scale, sy * state.scale, sw * state.scale, sh * state.scale);
+            ctx.strokeStyle = '#000';
+            ctx.lineDashOffset = 4;
+            ctx.strokeRect(sx * state.scale, sy * state.scale, sw * state.scale, sh * state.scale);
+            ctx.restore();
+        }
+
+        // 7. CROSSHAIR (For Select Tool when not dragging)
+        if (state.tool === 'select' && !state.isDrawing && !state.selection.isDragging && state.mouseX >= 0 && state.mouseY >= 0) {
+             const mx = state.mouseX * state.scale + state.scale/2;
+             const my = state.mouseY * state.scale + state.scale/2;
+             
+             // Crosshair Lines
+             ctx.save();
+             ctx.beginPath();
+             ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+             ctx.lineWidth = 1;
+             ctx.moveTo(mx, 0); ctx.lineTo(mx, canvas.height);
+             ctx.moveTo(0, my); ctx.lineTo(canvas.width, my);
+             ctx.stroke();
+             
+             // Cursor Box
+             ctx.strokeStyle = '#fff';
+             ctx.lineWidth = 2;
+             const boxSize = state.scale;
+             ctx.strokeRect(state.mouseX * state.scale, state.mouseY * state.scale, boxSize, boxSize);
+             ctx.restore();
+        }
+
+        // 8. Cursor & Shape Preview
+        if (state.mouseX >= 0 && state.mouseY >= 0 && state.tool !== 'select') {
             const drawVisuals = (mx, my, isStart, tx, ty) => {
                 const offset = Math.floor(state.brushSize / 2);
                 
-                // --- SHAPE PREVIEWS (Line, Rect, Circle) ---
                 if (state.isDrawing && ['line', 'rect', 'circle'].includes(state.tool)) {
                     ctx.beginPath();
-                    // Draw strong contrast for shape previews
-                    ctx.strokeStyle = "rgba(0,0,0,0.5)"; // Shadow trace
+                    ctx.strokeStyle = "rgba(0,0,0,0.5)"; 
                     ctx.lineWidth = (state.brushSize * state.scale) + 2;
                     ctx.lineCap = "square";
                     
@@ -948,7 +1271,6 @@
                         if (state.tool === 'line') {
                             ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
                         } else if (state.tool === 'rect') {
-                            // Fix: Use ctx.rect to define path (prevents double drawing)
                             ctx.rect(x0, y0, x1 - x0, y1 - y0);
                         } else if (state.tool === 'circle') {
                              const cx = (x0 + x1) / 2;
@@ -958,12 +1280,9 @@
                              ctx.ellipse(cx, cy, rx, ry, 0, 0, 2 * Math.PI);
                         }
                     };
-
-                    // Draw Shadow
                     traceShape(); 
                     ctx.stroke();
 
-                    // Draw Actual Color
                     ctx.beginPath();
                     ctx.strokeStyle = state.color;
                     ctx.lineWidth = state.brushSize * state.scale;
@@ -971,65 +1290,49 @@
                     ctx.stroke();
                 }
 
-                // --- TOOL CURSOR (The Box) ---
                 if (!state.isDrawing || ['pen', 'eraser', 'lighten', 'darken', 'picker', 'bucket'].includes(state.tool)) {
                     const drawX = (mx - offset) * state.scale;
                     const drawY = (my - offset) * state.scale;
                     const drawSize = state.brushSize * state.scale;
 
-                    // 1. Fill Preview
                     if (['pen', 'bucket', 'rect', 'circle', 'line'].includes(state.tool)) {
                         ctx.fillStyle = state.color;
-                        ctx.globalAlpha = 0.3; // Gentle tint
+                        ctx.globalAlpha = 0.3; 
                         ctx.fillRect(drawX, drawY, drawSize, drawSize);
                         ctx.globalAlpha = 1.0;
                     }
 
-                    // 2. High Visibility Outline helper
                     const drawCrispBox = (colorOuter, colorInner) => {
-                        // Outer Thick Line
                         ctx.lineWidth = 3;
                         ctx.strokeStyle = colorOuter;
                         ctx.strokeRect(drawX, drawY, drawSize, drawSize);
-                        
-                        // Inner Thin Line (draws on top of thick)
                         ctx.lineWidth = 1;
                         ctx.strokeStyle = colorInner;
                         ctx.strokeRect(drawX, drawY, drawSize, drawSize);
                     };
 
-                    // 3. Tool Specific Styling
                     if (state.tool === 'eraser') {
-                        drawCrispBox('#ffffff', '#ff0000'); // White outline, Red inner
-                        
-                        // Draw 'X' for eraser
+                        drawCrispBox('#ffffff', '#ff0000'); 
                         ctx.beginPath();
                         ctx.strokeStyle = '#ff0000';
                         ctx.moveTo(drawX, drawY); ctx.lineTo(drawX + drawSize, drawY + drawSize);
                         ctx.moveTo(drawX + drawSize, drawY); ctx.lineTo(drawX, drawY + drawSize);
                         ctx.stroke();
-
                     } else if (state.tool === 'picker') {
-                        drawCrispBox('#000000', '#ffffff'); // Standard Black/White
-                        
-                        // Crosshair for precision
+                        drawCrispBox('#000000', '#ffffff'); 
                         ctx.beginPath();
                         ctx.strokeStyle = '#ffffff'; 
                         ctx.lineWidth = 2;
-                        // Vertical
                         ctx.moveTo(drawX + drawSize/2, drawY + drawSize/2 - 5);
                         ctx.lineTo(drawX + drawSize/2, drawY + drawSize/2 + 5);
-                        // Horizontal
                         ctx.moveTo(drawX + drawSize/2 - 5, drawY + drawSize/2);
                         ctx.lineTo(drawX + drawSize/2 + 5, drawY + drawSize/2);
                         ctx.stroke();
-
                     } else if (state.tool === 'lighten') {
-                        drawCrispBox('#000000', '#ffff00'); // Yellow inner
+                        drawCrispBox('#000000', '#ffff00');
                     } else if (state.tool === 'darken') {
-                        drawCrispBox('#ffffff', '#0000aa'); // Blue inner
+                        drawCrispBox('#ffffff', '#0000aa');
                     } else {
-                        // Standard Pen/Bucket
                         drawCrispBox('rgba(0,0,0,0.8)', '#ffffff');
                     }
                 }
@@ -1040,33 +1343,24 @@
             const sx = state.startDragX;
             const sy = state.startDragY;
 
-            // 1. Original Cursor
             drawVisuals(mx, my, false, sx, sy);
             
-            // 2. Mirror Visuals (Ghost Cursors)
             const originalAlpha = ctx.globalAlpha;
             ctx.globalAlpha = 0.6; 
             
-            if (state.mirrorX) {
-                drawVisuals(state.width - 1 - mx, my, false, state.width - 1 - sx, sy);
-            }
-            if (state.mirrorY) {
-                drawVisuals(mx, state.height - 1 - my, false, sx, state.height - 1 - sy);
-            }
-            if (state.mirrorX && state.mirrorY) {
-                drawVisuals(state.width - 1 - mx, state.height - 1 - my, false, state.width - 1 - sx, state.height - 1 - sy);
-            }
+            if (state.mirrorX) drawVisuals(state.width - 1 - mx, my, false, state.width - 1 - sx, sy);
+            if (state.mirrorY) drawVisuals(mx, state.height - 1 - my, false, sx, state.height - 1 - sy);
+            if (state.mirrorX && state.mirrorY) drawVisuals(state.width - 1 - mx, state.height - 1 - my, false, state.width - 1 - sx, state.height - 1 - sy);
             
             ctx.globalAlpha = originalAlpha;
         }
     }
 
-    // --- HISTORY ---
     function undo() {
         if (state.historyIndex > 0) {
             state.historyIndex--;
             restoreFromHistory();
-            saveState(); // Update save on undo
+            saveState(); 
         }
     }
 
@@ -1074,7 +1368,7 @@
         if (state.historyIndex < state.history.length - 1) {
             state.historyIndex++;
             restoreFromHistory();
-            saveState(); // Update save on redo
+            saveState(); 
         }
     }
 
@@ -1089,6 +1383,9 @@
             hist.data.width,
             hist.data.height
         );
+        // Clear any active selection state on undo
+        state.selection.active = false;
+        state.selection.buffer = null;
         renderEditor();
         updateFrameThumb(state.currentFrameIndex);
     }
@@ -1114,24 +1411,64 @@
         state.historyIndex++;
     }
 
-    // --- SHORTCUTS ---
     function handleShortcuts(e) {
         if (e.target.tagName === 'INPUT') return;
         
-        // Undo/Redo
-        if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+        // Arrow Keys for Moving Selection
+        if (state.selection.active && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
             e.preventDefault();
-            e.shiftKey ? redo() : undo();
+            if (e.key === 'ArrowUp') state.selection.y--;
+            if (e.key === 'ArrowDown') state.selection.y++;
+            if (e.key === 'ArrowLeft') state.selection.x--;
+            if (e.key === 'ArrowRight') state.selection.x++;
+            renderEditor();
             return;
         }
-        if (e.ctrlKey && e.key.toLowerCase() === 'y') {
-            e.preventDefault();
-            redo();
-            return;
+
+        // Copy / Cut / Paste
+        if (e.ctrlKey) {
+            if (e.key.toLowerCase() === 'c') {
+                e.preventDefault();
+                state.clipboard = captureSelection();
+                return;
+            }
+            if (e.key.toLowerCase() === 'x') {
+                e.preventDefault();
+                state.clipboard = captureSelection();
+                eraseUnderSelection();
+                state.selection.active = false; 
+                state.selection.buffer = null;
+                commitToHistory();
+                renderEditor();
+                return;
+            }
+            if (e.key.toLowerCase() === 'v') {
+                e.preventDefault();
+                if (state.clipboard) {
+                    setTool('select'); // Switch tool first to prep UI
+                    anchorSelection(); // Commit previous
+                    
+                    state.selection.buffer = new ImageData(
+                        new Uint8ClampedArray(state.clipboard.data),
+                        state.clipboard.width,
+                        state.clipboard.height
+                    );
+                    state.selection.w = state.clipboard.width;
+                    state.selection.h = state.clipboard.height;
+                    state.selection.x = Math.floor((state.width - state.selection.w)/2);
+                    state.selection.y = Math.floor((state.height - state.selection.h)/2);
+                    state.selection.active = true;
+                    renderEditor();
+                }
+                return;
+            }
+            if (e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+            if (e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
         }
 
         if (!e.ctrlKey) {
             switch(e.key.toLowerCase()) {
+                case 's': setTool('select'); break;
                 case 'p': setTool('pen'); break;
                 case 'e': setTool('eraser'); break;
                 case 'i': setTool('picker'); break;
@@ -1139,19 +1476,18 @@
                 case 'l': setTool('line'); break;
                 case 'r': setTool('rect'); break;
                 case 'c': setTool('circle'); break;
-                case 'u': setTool('lighten'); break; // Highlight
-                case 'd': setTool('darken'); break; // Shade
+                case 'u': setTool('lighten'); break; 
+                case 'd': setTool('darken'); break; 
                 case 'g': toggleGrid(); break;
                 case 'o': toggleOnion(); break;
                 case 'm': toggleMirrorX(); break; 
                 case 'n': toggleMirrorY(); break; 
-                case 'delete': clearCanvas(); break;
+                case 'delete': deleteSelection(); break;
                 case ' ': e.preventDefault(); state.isPlaying = !state.isPlaying; break;
             }
         }
     }
 
-    // --- APP UTILS ---
     function setupDragSource() {
         dragSource.addEventListener('dragstart', (e) => {
             e.dataTransfer.setData('type', 'current');
@@ -1162,36 +1498,30 @@
     function renderPalette() {
         const container = document.getElementById('palette-container');
         container.innerHTML = '';
-
         state.palette.forEach((color, idx) => {
             const div = document.createElement('div');
             div.className = 'swatch';
             div.style.backgroundColor = color;
             div.draggable = true;
             div.title = "Left Click: Select | Right Click: Delete";
-
             div.onclick = () => { updateColor(color); setTool('pen'); };
-            
             div.oncontextmenu = (e) => {
                 e.preventDefault();
                 if(state.palette.length > 1) {
                     state.palette.splice(idx, 1);
                     renderPalette();
-                    saveState(); // Save on palette change
+                    saveState(); 
                 }
             };
-
             div.addEventListener('dragstart', (e) => {
                 e.dataTransfer.setData('type', 'swatch');
                 e.dataTransfer.setData('index', idx);
             });
-
             div.addEventListener('dragover', (e) => { e.preventDefault(); div.classList.add('drag-over'); });
             div.addEventListener('dragleave', () => div.classList.remove('drag-over'));
             div.addEventListener('drop', (e) => {
                 e.preventDefault(); div.classList.remove('drag-over');
                 const type = e.dataTransfer.getData('type');
-                
                 if (type === 'current') {
                     state.palette[idx] = e.dataTransfer.getData('color');
                 } else if (type === 'swatch') {
@@ -1201,16 +1531,13 @@
                     state.palette.splice(idx, 0, movedColor);
                 }
                 renderPalette();
-                saveState(); // Save on reorder/drop
+                saveState(); 
             });
-
             container.appendChild(div);
         });
-
         const addBtn = document.createElement('div');
         addBtn.className = 'btn-add-color';
         addBtn.innerHTML = '+';
-        addBtn.title = "Add Color Slot";
         addBtn.onclick = addColorSlot;
         container.appendChild(addBtn);
     }
@@ -1220,7 +1547,7 @@
         renderPalette();
         const container = document.getElementById('palette-container');
         setTimeout(() => container.scrollTop = container.scrollHeight, 10);
-        saveState(); // Save on new color
+        saveState(); 
     }
 
     function updateColor(hex) {
@@ -1282,7 +1609,7 @@
             commitToHistory(); 
             renderEditor();
             updateFrameThumb(state.currentFrameIndex);
-            saveState(); // Save on import
+            saveState(); 
         };
         img.src = sourceUrl;
     }
@@ -1296,7 +1623,7 @@
         state.frames = []; state.currentFrameIndex = 0; state.history = []; state.historyIndex = -1;
         resizeCanvas(); 
         addFrame(); 
-        saveState(); // Save on resize (essentially resets the save file)
+        saveState(); 
     }
 
     function resizeCanvas() {
@@ -1314,7 +1641,7 @@
         commitToHistory();
         renderEditor();
         updateFrameThumb(state.currentFrameIndex);
-        saveState(); // Save on clear
+        saveState(); 
     }
 
     function addFrame() {
@@ -1324,7 +1651,7 @@
         commitToHistory(); 
         renderFrameList();
         renderEditor();
-        saveState(); // Save on new frame
+        saveState(); 
     }
 
     function duplicateFrame() {
@@ -1335,7 +1662,7 @@
         commitToHistory();
         renderFrameList();
         renderEditor();
-        saveState(); // Save on duplicate
+        saveState(); 
     }
 
     function deleteFrame() {
@@ -1345,7 +1672,7 @@
         commitToHistory();
         renderFrameList();
         renderEditor();
-        saveState(); // Save on delete
+        saveState(); 
     }
 
     function renderFrameList() {
@@ -1397,8 +1724,10 @@
     }
 
     function setTool(name) {
+        anchorSelection(); // Commit any selection before changing tools
         state.tool = name;
         document.querySelectorAll('.tool-group button').forEach(b => b.classList.remove('active'));
+        if(name === 'select') document.getElementById('btn-select').classList.add('active');
         if(name === 'pen') document.getElementById('btn-pen').classList.add('active');
         if(name === 'eraser') document.getElementById('btn-eraser').classList.add('active');
         if(name === 'picker') document.getElementById('btn-picker').classList.add('active');
